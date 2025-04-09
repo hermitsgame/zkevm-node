@@ -397,8 +397,9 @@ func (p *Pool) DeleteGasPricesHistoryOlderThan(ctx context.Context, date time.Ti
 
 // GetGasPrices returns the current L2 Gas Price and L1 Gas Price
 func (p *Pool) GetGasPrices(ctx context.Context) (GasPrices, error) {
-	l2GasPrice, l1GasPrice, err := p.storage.GetGasPrices(ctx)
-	return GasPrices{L1GasPrice: l1GasPrice, L2GasPrice: l2GasPrice}, err
+	//l2GasPrice, l1GasPrice, err := p.storage.GetGasPrices(ctx)
+	//return GasPrices{L1GasPrice: l1GasPrice, L2GasPrice: l2GasPrice}, err // masked by mw
+	return GasPrices{L1GasPrice: 1000000000, L2GasPrice: 1000000000}, nil
 }
 
 // CountPendingTransactions get number of pending transactions

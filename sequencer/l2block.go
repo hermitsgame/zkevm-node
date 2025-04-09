@@ -120,6 +120,7 @@ func (f *finalizer) processPendingL2Blocks(ctx context.Context) {
 			err := f.processL2Block(ctx, l2Block)
 
 			if err != nil {
+				log.Error(err.Error())
 				halt := false
 				if f.lastL2BlockWasReorg {
 					// We had 2 consecutives reorg in the same L2 block, we halt after log/dump the info
@@ -227,9 +228,11 @@ func (f *finalizer) processL2Block(ctx context.Context, l2Block *L2Block) error 
 	}
 
 	// Sanity check. Check blockResponse.timestamp matches l2block.timestamp
+	/* masked by mw
 	if blockResponse.Timestamp != l2Block.timestamp {
 		return fmt.Errorf("blockResponse.Timestamp %d doesn't match l2Block.timestamp %d", blockResponse.Timestamp, l2Block.timestamp)
 	}
+	*/
 
 	l2Block.batchResponse = batchResponse
 

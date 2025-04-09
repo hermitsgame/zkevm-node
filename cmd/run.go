@@ -113,11 +113,14 @@ func start(cliCtx *cli.Context) error {
 		log.Fatal(err)
 	}
 
+	/* masked by mw
 	// READ CHAIN ID FROM POE SC
 	l2ChainID, err := etherman.GetL2ChainID()
 	if err != nil {
 		log.Fatal(err)
 	}
+	*/
+	l2ChainID := uint64(1221)
 
 	st, currentForkID := newState(cliCtx.Context, c, etherman, l2ChainID, stateSqlDB, eventLog, needsExecutor, needsStateTree, false)
 

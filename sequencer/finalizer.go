@@ -178,7 +178,7 @@ func (f *finalizer) Start(ctx context.Context) {
 	go f.storePendingL2Blocks(ctx)
 
 	// Foced batches checking
-	go f.checkForcedBatches(ctx)
+	//go f.checkForcedBatches(ctx) masked by mw
 
 	// Processing transactions and finalizing batches
 	f.finalizeBatches(ctx)
@@ -514,7 +514,9 @@ func (f *finalizer) processTransaction(ctx context.Context, tx *TxTracker, first
 	// If it is the first time we process this tx then we calculate the EffectiveGasPrice
 	if firstTxProcess {
 		// Get L1 gas price and store in txTracker to make it consistent during the lifespan of the transaction
-		tx.L1GasPrice, tx.L2GasPrice = f.poolIntf.GetL1AndL2GasPrice()
+		//tx.L1GasPrice, tx.L2GasPrice = f.poolIntf.GetL1AndL2GasPrice() // masked by mw
+		tx.L1GasPrice, tx.L2GasPrice = 1000000000, 1000000000
+
 		// Get the tx and l2 gas price we will use in the egp calculation. If egp is disabled we will use a "simulated" tx gas price
 		txGasPrice, txL2GasPrice := f.effectiveGasPrice.GetTxAndL2GasPrice(tx.GasPrice, tx.L1GasPrice, tx.L2GasPrice)
 

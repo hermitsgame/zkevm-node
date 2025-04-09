@@ -298,6 +298,7 @@ func (s *ClientSynchronizer) isGenesisProcessed(ctx context.Context, dbTx pgx.Tx
 
 func (s *ClientSynchronizer) processGenesis() (*state.Block, error) {
 	log.Info("State is empty, verifying genesis block")
+	/* masked by mw
 	valid, err := s.etherMan.VerifyGenBlockNumber(s.ctx, s.genesis.BlockNumber)
 	if err != nil {
 		log.Error("error checking genesis block number. Error: ", err)
@@ -313,6 +314,7 @@ func (s *ClientSynchronizer) processGenesis() (*state.Block, error) {
 		log.Error("error synchronizing pre genesis rollup events: ", err)
 		return nil, err
 	}
+	*/
 	log.Info("Setting genesis block")
 	header, err := s.etherMan.HeaderByNumber(s.ctx, big.NewInt(0).SetUint64(s.genesis.BlockNumber))
 	if err != nil {
@@ -335,12 +337,13 @@ func (s *ClientSynchronizer) processGenesis() (*state.Block, error) {
 		log.Error("error setting genesis: ", err)
 		return nil, rollback(s.ctx, dbTx, err)
 	}
+	/* masked by mw
 	err = s.RequestAndProcessRollupGenesisBlock(dbTx, lastEthBlockSynced)
 	if err != nil {
 		log.Error("error processing Rollup genesis block: ", err)
 		return nil, rollback(s.ctx, dbTx, err)
 	}
-
+	*/
 	if genesisRoot != s.genesis.Root {
 		log.Errorf("Calculated newRoot should be %s instead of %s", s.genesis.Root.String(), genesisRoot.String())
 		return nil, rollback(s.ctx, dbTx, err)
@@ -394,6 +397,8 @@ func (s *ClientSynchronizer) Sync() error {
 		}
 	}
 
+	log.Infof("lastEthBlockSynced %d", lastEthBlockSynced.BlockNumber)
+
 	initBatchNumber, err := s.state.GetLastBatchNumber(s.ctx, dbTx)
 	if err != nil {
 		log.Error("error getting latest batchNumber synced. Error: ", err)
@@ -425,6 +430,18 @@ func (s *ClientSynchronizer) Sync() error {
 	}
 	metrics.InitializationTime(time.Since(startInitialization))
 
+	// add by mw
+	log.Info("Sync started")
+	for {
+		select {
+		case <-s.ctx.Done():
+			return nil
+		case <-time.After(time.Second):
+			continue
+		}
+	}
+
+	/* masked by mw
 	for {
 		select {
 		case <-s.ctx.Done():
@@ -553,6 +570,7 @@ func (s *ClientSynchronizer) Sync() error {
 			log.Info("L1 state fully synchronized")
 		}
 	}
+	*/
 }
 
 // RequestAndProcessRollupGenesisBlock it requests the rollup genesis block and processes it

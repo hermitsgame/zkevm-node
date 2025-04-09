@@ -13,11 +13,8 @@ import (
 	"strings"
 	"time"
 
-	beaconclient "github.com/0xPolygonHermez/zkevm-node/beacon_client"
 	"github.com/0xPolygonHermez/zkevm-node/encoding"
 	"github.com/0xPolygonHermez/zkevm-node/etherman/eip4844"
-	"github.com/0xPolygonHermez/zkevm-node/etherman/etherscan"
-	"github.com/0xPolygonHermez/zkevm-node/etherman/ethgasstation"
 	"github.com/0xPolygonHermez/zkevm-node/etherman/metrics"
 	"github.com/0xPolygonHermez/zkevm-node/etherman/smartcontracts/elderberrypolygonzkevm"
 	"github.com/0xPolygonHermez/zkevm-node/etherman/smartcontracts/etrogpolygonrollupmanager"
@@ -222,16 +219,18 @@ func NewClient(cfg Config, l1Config L1Config) (*Client, error) {
 	if cfg.ConsensusL1URL == "" {
 		log.Warn("ConsensusL1URL is not set, so Feijoa is not going to work")
 	}
-	feijoaEnabled := true
-	beaconClient := beaconclient.NewBeaconAPIClient(cfg.ConsensusL1URL)
-	eip4844 := eip4844.NewEthermanEIP4844(beaconClient)
-	if err := eip4844.Initialize(context.Background()); err != nil {
-		// TODO: Must be mandatory to have a consensusL1URL configured, but
-		// for maintain compatibility allow to disable Feijoa
-		// so the log.Warnf must be an Errorf and must return  nil, err
-		log.Warnf("error initializing EIP-4844,Feijoa is going to be disabled.  URL:%s : %+v", cfg.ConsensusL1URL, err)
-		feijoaEnabled = false
-	}
+
+	/* masked by mw
+		feijoaEnabled := true
+		beaconClient := beaconclient.NewBeaconAPIClient(cfg.ConsensusL1URL)
+		eip4844 := eip4844.NewEthermanEIP4844(beaconClient)
+		if err := eip4844.Initialize(context.Background()); err != nil {
+			// TODO: Must be mandatory to have a consensusL1URL configured, but
+			// for maintain compatibility allow to disable Feijoa
+			// so the log.Warnf must be an Errorf and must return  nil, err
+			log.Warnf("error initializing EIP-4844,Feijoa is going to be disabled.  URL:%s : %+v", cfg.ConsensusL1URL, err)
+			feijoaEnabled = false
+		}
 	// Create smc clients
 	etrogZkevm, err := etrogpolygonzkevm.NewEtrogpolygonzkevm(l1Config.ZkEVMAddr, ethClient)
 	if err != nil {
@@ -320,6 +319,15 @@ func NewClient(cfg Config, l1Config L1Config) (*Client, error) {
 		eventFeijoaManager.AddProcessor(NewEventFeijoaSequenceBlobsProcessor(feijoaContracts))
 		client.eventFeijoaManager = eventFeijoaManager
 	}
+	*/
+
+	client := &Client{
+		EthClient: ethClient,
+		l1Cfg:     l1Config,
+		cfg:       cfg,
+		auth:      map[common.Address]bind.TransactOpts{},
+	}
+
 	return client, nil
 }
 
@@ -398,119 +406,132 @@ func (etherMan *Client) GetL1BlockUpgradeLxLy(ctx context.Context, genesisBlock 
 
 // GetForks returns fork information
 func (etherMan *Client) GetForks(ctx context.Context, genBlockNumber uint64, lastL1BlockSynced uint64) ([]state.ForkIDInterval, error) {
-	log.Debug("Getting forkIDs from blockNumber: ", genBlockNumber)
-	start := time.Now()
-	var logs []types.Log
-	// At minimum it checks the GenesisBlock
-	if lastL1BlockSynced < genBlockNumber {
-		lastL1BlockSynced = genBlockNumber
+	var forks_ []state.ForkIDInterval = []state.ForkIDInterval{
+		{
+			FromBatchNumber: 0,
+			ToBatchNumber:   math.MaxUint64,
+			ForkId:          9,
+			Version:         "0.6.8",
+			BlockNumber:     genBlockNumber,
+		},
 	}
-	log.Debug("Using ForkIDChunkSize: ", etherMan.cfg.ForkIDChunkSize)
-	for i := genBlockNumber; i <= lastL1BlockSynced; i = i + etherMan.cfg.ForkIDChunkSize + 1 {
-		final := i + etherMan.cfg.ForkIDChunkSize
-		if final > lastL1BlockSynced {
-			// Limit the query to the last l1BlockSynced
-			final = lastL1BlockSynced
-		}
-		log.Debug("INTERVAL. Initial: ", i, ". Final: ", final)
-		// Filter query
-		query := ethereum.FilterQuery{
-			FromBlock: new(big.Int).SetUint64(i),
-			ToBlock:   new(big.Int).SetUint64(final),
-			Addresses: etherMan.SCAddresses,
-			Topics:    [][]common.Hash{{updateZkEVMVersionSignatureHash, updateRollupSignatureHash, addExistingRollupSignatureHash, createNewRollupSignatureHash}},
-		}
-		l, err := etherMan.EthClient.FilterLogs(ctx, query)
-		if err != nil {
-			return []state.ForkIDInterval{}, err
-		}
-		logs = append(logs, l...)
-	}
+	return forks_, nil
 
-	var forks []state.ForkIDInterval
-	for i, l := range logs {
-		var zkevmVersion preetrogpolygonzkevm.PreetrogpolygonzkevmUpdateZkEVMVersion
-		switch l.Topics[0] {
-		case updateZkEVMVersionSignatureHash:
-			log.Debug("updateZkEVMVersion Event received")
-			zkevmV, err := etherMan.PreEtrogZkEVM.ParseUpdateZkEVMVersion(l)
-			if err != nil {
-				return []state.ForkIDInterval{}, err
-			}
-			if zkevmV != nil {
-				zkevmVersion = *zkevmV
-			}
-		case updateRollupSignatureHash:
-			log.Debug("updateRollup Event received")
-			updateRollupEvent, err := etherMan.EtrogRollupManager.ParseUpdateRollup(l)
-			if err != nil {
-				return []state.ForkIDInterval{}, err
-			}
-			if etherMan.RollupID != updateRollupEvent.RollupID {
-				continue
-			}
-			// Query to get the forkID
-			rollupType, err := etherMan.EtrogRollupManager.RollupTypeMap(&bind.CallOpts{Pending: false}, updateRollupEvent.NewRollupTypeID)
-			if err != nil {
-				return []state.ForkIDInterval{}, err
-			}
-			zkevmVersion.ForkID = rollupType.ForkID
-			zkevmVersion.NumBatch = updateRollupEvent.LastVerifiedBatchBeforeUpgrade
-
-		case addExistingRollupSignatureHash:
-			log.Debug("addExistingRollup Event received")
-			addExistingRollupEvent, err := etherMan.EtrogRollupManager.ParseAddExistingRollup(l)
-			if err != nil {
-				return []state.ForkIDInterval{}, err
-			}
-			if etherMan.RollupID != addExistingRollupEvent.RollupID {
-				continue
-			}
-			zkevmVersion.ForkID = addExistingRollupEvent.ForkID
-			zkevmVersion.NumBatch = addExistingRollupEvent.LastVerifiedBatchBeforeUpgrade
-
-		case createNewRollupSignatureHash:
-			log.Debug("createNewRollup Event received")
-			createNewRollupEvent, err := etherMan.EtrogRollupManager.ParseCreateNewRollup(l)
-			if err != nil {
-				return []state.ForkIDInterval{}, err
-			}
-			if etherMan.RollupID != createNewRollupEvent.RollupID {
-				continue
-			}
-			// Query to get the forkID
-			rollupType, err := etherMan.EtrogRollupManager.RollupTypeMap(&bind.CallOpts{Pending: false}, createNewRollupEvent.RollupTypeID)
-			if err != nil {
-				log.Error(err)
-				return []state.ForkIDInterval{}, err
-			}
-			zkevmVersion.ForkID = rollupType.ForkID
-			zkevmVersion.NumBatch = 0
+	/*
+		log.Debug("Getting forkIDs from blockNumber: ", genBlockNumber)
+		start := time.Now()
+		var logs []types.Log
+		// At minimum it checks the GenesisBlock
+		if lastL1BlockSynced < genBlockNumber {
+			lastL1BlockSynced = genBlockNumber
 		}
-		var fork state.ForkIDInterval
-		if i == 0 {
-			fork = state.ForkIDInterval{
-				FromBatchNumber: zkevmVersion.NumBatch + 1,
-				ToBatchNumber:   math.MaxUint64,
-				ForkId:          zkevmVersion.ForkID,
-				Version:         zkevmVersion.Version,
-				BlockNumber:     l.BlockNumber,
+		log.Debug("Using ForkIDChunkSize: ", etherMan.cfg.ForkIDChunkSize)
+		for i := genBlockNumber; i <= lastL1BlockSynced; i = i + etherMan.cfg.ForkIDChunkSize + 1 {
+			final := i + etherMan.cfg.ForkIDChunkSize
+			if final > lastL1BlockSynced {
+				// Limit the query to the last l1BlockSynced
+				final = lastL1BlockSynced
 			}
-		} else {
-			forks[len(forks)-1].ToBatchNumber = zkevmVersion.NumBatch
-			fork = state.ForkIDInterval{
-				FromBatchNumber: zkevmVersion.NumBatch + 1,
-				ToBatchNumber:   math.MaxUint64,
-				ForkId:          zkevmVersion.ForkID,
-				Version:         zkevmVersion.Version,
-				BlockNumber:     l.BlockNumber,
+			log.Debug("INTERVAL. Initial: ", i, ". Final: ", final)
+			// Filter query
+			query := ethereum.FilterQuery{
+				FromBlock: new(big.Int).SetUint64(i),
+				ToBlock:   new(big.Int).SetUint64(final),
+				Addresses: etherMan.SCAddresses,
+				Topics:    [][]common.Hash{{updateZkEVMVersionSignatureHash, updateRollupSignatureHash, addExistingRollupSignatureHash, createNewRollupSignatureHash}},
 			}
+			l, err := etherMan.EthClient.FilterLogs(ctx, query)
+			if err != nil {
+				return []state.ForkIDInterval{}, err
+			}
+			logs = append(logs, l...)
 		}
-		forks = append(forks, fork)
-	}
-	metrics.GetForksTime(time.Since(start))
-	log.Debugf("ForkIDs found: %+v", forks)
-	return forks, nil
+
+		var forks []state.ForkIDInterval
+		for i, l := range logs {
+			var zkevmVersion preetrogpolygonzkevm.PreetrogpolygonzkevmUpdateZkEVMVersion
+			switch l.Topics[0] {
+			case updateZkEVMVersionSignatureHash:
+				log.Debug("updateZkEVMVersion Event received")
+				zkevmV, err := etherMan.PreEtrogZkEVM.ParseUpdateZkEVMVersion(l)
+				if err != nil {
+					return []state.ForkIDInterval{}, err
+				}
+				if zkevmV != nil {
+					zkevmVersion = *zkevmV
+				}
+			case updateRollupSignatureHash:
+				log.Debug("updateRollup Event received")
+				updateRollupEvent, err := etherMan.EtrogRollupManager.ParseUpdateRollup(l)
+				if err != nil {
+					return []state.ForkIDInterval{}, err
+				}
+				if etherMan.RollupID != updateRollupEvent.RollupID {
+					continue
+				}
+				// Query to get the forkID
+				rollupType, err := etherMan.EtrogRollupManager.RollupTypeMap(&bind.CallOpts{Pending: false}, updateRollupEvent.NewRollupTypeID)
+				if err != nil {
+					return []state.ForkIDInterval{}, err
+				}
+				zkevmVersion.ForkID = rollupType.ForkID
+				zkevmVersion.NumBatch = updateRollupEvent.LastVerifiedBatchBeforeUpgrade
+
+			case addExistingRollupSignatureHash:
+				log.Debug("addExistingRollup Event received")
+				addExistingRollupEvent, err := etherMan.EtrogRollupManager.ParseAddExistingRollup(l)
+				if err != nil {
+					return []state.ForkIDInterval{}, err
+				}
+				if etherMan.RollupID != addExistingRollupEvent.RollupID {
+					continue
+				}
+				zkevmVersion.ForkID = addExistingRollupEvent.ForkID
+				zkevmVersion.NumBatch = addExistingRollupEvent.LastVerifiedBatchBeforeUpgrade
+
+			case createNewRollupSignatureHash:
+				log.Debug("createNewRollup Event received")
+				createNewRollupEvent, err := etherMan.EtrogRollupManager.ParseCreateNewRollup(l)
+				if err != nil {
+					return []state.ForkIDInterval{}, err
+				}
+				if etherMan.RollupID != createNewRollupEvent.RollupID {
+					continue
+				}
+				// Query to get the forkID
+				rollupType, err := etherMan.EtrogRollupManager.RollupTypeMap(&bind.CallOpts{Pending: false}, createNewRollupEvent.RollupTypeID)
+				if err != nil {
+					log.Error(err)
+					return []state.ForkIDInterval{}, err
+				}
+				zkevmVersion.ForkID = rollupType.ForkID
+				zkevmVersion.NumBatch = 0
+			}
+			var fork state.ForkIDInterval
+			if i == 0 {
+				fork = state.ForkIDInterval{
+					FromBatchNumber: zkevmVersion.NumBatch + 1,
+					ToBatchNumber:   math.MaxUint64,
+					ForkId:          zkevmVersion.ForkID,
+					Version:         zkevmVersion.Version,
+					BlockNumber:     l.BlockNumber,
+				}
+			} else {
+				forks[len(forks)-1].ToBatchNumber = zkevmVersion.NumBatch
+				fork = state.ForkIDInterval{
+					FromBatchNumber: zkevmVersion.NumBatch + 1,
+					ToBatchNumber:   math.MaxUint64,
+					ForkId:          zkevmVersion.ForkID,
+					Version:         zkevmVersion.Version,
+					BlockNumber:     l.BlockNumber,
+				}
+			}
+			forks = append(forks, fork)
+		}
+		metrics.GetForksTime(time.Since(start))
+		log.Debugf("ForkIDs found: %+v", forks)
+		return forks, nil
+	*/
 }
 
 // GetRollupInfoByBlockRange function retrieves the Rollup information that are included in all this ethereum blocks
